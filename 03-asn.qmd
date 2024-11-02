@@ -1,0 +1,583 @@
+---
+title: "Written Assignment 03"
+author: "Simone Mayers"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+number-sections: true
+number-depth: 3
+format:
+  html:
+    toc: true
+    toc-location: right
+    number-sections: true
+    number-depth: 3
+    html-math-method: katex
+    embed-resources: true
+# bibliography: "dasc-6000.bib" 
+# csl: "ieee-with-url.csl"
+# linkcolor: "red"
+# urlcolor: "blue"
+# link-citations: yes
+# header-includes:
+#   - \usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+---
+
+
+# The Data Quality Report
+```{r setup, include=FALSE} 
+
+# Load necessary libraries
+library(data.table)
+library(dplyr)
+library(lubridate)
+
+
+# Load dataset
+data <- fread("flight_delays.csv")
+
+# Check for NA values and empty strings
+sum(is.na(data$ScheduledDepartureHour))  # Count NA values
+sum(data$ScheduledDepartureHour == "", na.rm = TRUE)  # Count empty strings
+
+# Replace empty strings with a default value "00:00"
+data$ScheduledDepartureHour[data$ScheduledDepartureHour == ""] <- "00:00"
+data$ActualDepartureHour[data$ActualDepartureHour == ""] <- "00:00"
+data$ScheduledArrivalHour[data$ScheduledArrivalHour == ""] <- "00:00"
+data$ActualArrivalHour[data$ActualArrivalHour == ""] <- "00:00"
+
+# Replace any rows that fail to parse with NA
+data$ScheduledDepartureHour[is.na(hm(data$ScheduledDepartureHour))] <- NA
+
+# Convert the time columns to Period format using hm()
+data$ScheduledDepartureHour <- hm(data$ScheduledDepartureHour)
+data$ActualDepartureHour <- hm(data$ActualDepartureHour)
+data$ScheduledArrivalHour <- hm(data$ScheduledArrivalHour)
+data$ActualArrivalHour <- hm(data$ActualArrivalHour)
+
+# Inspect the structure after conversion
+str(data)
+
+
+
+```
+
+## Continuous Features
+
+
+Gather aggregates for each continuous feature:
+
+```{r}
+summary(data[, .(DelayMinutes, Distance)])
+continuousFeatureNames <- c("DelayMinutes", "Distance")
+
+continuousFeatureCounts <- sapply(data[, ..continuousFeatureNames], function(x) sum(!is.na(x)))
+continuousFeatureMissingPercents <- sapply(data[, ..continuousFeatureNames], function(x) mean(is.na(x)) * 100)
+continuousFeatureCardinalities <- sapply(data[, ..continuousFeatureNames], function(x) length(unique(x)))
+continuousFeatureMinimums <- sapply(data[, ..continuousFeatureNames], function(x) min(x, na.rm=TRUE))
+continuousFeature1stQuartiles <- sapply(data[, ..continuousFeatureNames], function(x) quantile(x, 0.25, na.rm=TRUE))
+continuousFeatureMeans <- sapply(data[, ..continuousFeatureNames], function(x) mean(x, na.rm=TRUE))
+continuousFeatureMedians <- sapply(data[, ..continuousFeatureNames], function(x) median(x, na.rm=TRUE))
+continuousFeature3rdQuartiles <- sapply(data[, ..continuousFeatureNames], function(x) quantile(x, 0.75, na.rm=TRUE))
+continuousFeatureMaximums <- sapply(data[, ..continuousFeatureNames], function(x) max(x, na.rm=TRUE))
+continuousFeatureStDevs <- sapply(data[, ..continuousFeatureNames], function(x) sd(x, na.rm=TRUE))
+
+```
+
+Create Continuous Feature Data Quality Table:
+
+```{r}
+continuousFeatureQualityReportTable <- data.frame(
+  Feature=continuousFeatureNames,
+  Count=continuousFeatureCounts,
+  "Missing %"=continuousFeatureMissingPercents,
+  Cardinality=continuousFeatureCardinalities,
+  Minimum=continuousFeatureMinimums,
+  "First Quartile"=continuousFeature1stQuartiles,
+  Mean=continuousFeatureMeans,
+  Median=continuousFeatureMedians,
+  "Third Quartile"=continuousFeature3rdQuartiles,
+  Maximum=continuousFeatureMaximums,
+  StDev=continuousFeatureStDevs
+)
+
+print(continuousFeatureQualityReportTable)
+
+```
+
+
+## Categorical Features
+
+Gather aggregates for each categorical feature:
+```{r}
+categoricalFeatureNames <- c("Airline", "FlightNumber", "Origin", "Destination", "DelayReason", "Cancelled",
+                             "Diverted", "AircraftType", "TailNumber", "ScheduledDepartureDate",
+                             "ScheduledDepartureHour","ActualDepartureDate", "ActualDepartureHour", "ScheduledArrivalDate",
+                             "ScheduledArrivalHour", "ActualArrivalDate", "ActualArrivalHour")
+
+# Calculate feature counts, missing percentages, and cardinalities for categorical features
+categoricalFeatureCounts <- sapply(data[, ..categoricalFeatureNames], function(x) sum(!is.na(x)))
+categoricalFeatureMissingPercents <- sapply(data[, ..categoricalFeatureNames], function(x) mean(is.na(x)) * 100)
+categoricalFeatureCardinalities <- sapply(data[, ..categoricalFeatureNames], function(x) length(unique(x)))
+
+# Calculate mode, mode frequency, and mode percentage for categorical features
+categoricalFeatureModes <- sapply(data[, ..categoricalFeatureNames], function(x) names(sort(-table(x)))[1])
+categoricalFeatureModeFrequencies <- sapply(data[, ..categoricalFeatureNames], function(x) max(table(x)))
+categoricalFeatureModePercents <- sapply(data[, ..categoricalFeatureNames], function(x) max(table(x))/length(x)*100)
+
+
+```
+
+Create Categorical Feature Data Quality Table:
+
+```{r}
+
+categoricalFeatureQualityReportTable <- data.frame(
+  Feature=categoricalFeatureNames,
+  Count=categoricalFeatureCounts,
+  "Missing %"=categoricalFeatureMissingPercents,
+  Cardinality=categoricalFeatureCardinalities,
+  Mode=categoricalFeatureModes,
+  "Mode Frequency"=categoricalFeatureModeFrequencies,
+  "Mode %"=categoricalFeatureModePercents
+)
+
+print(categoricalFeatureQualityReportTable)
+
+```
+
+
+
+
+# Histograms of Continuous Features
+
+```{r}
+# Load ggplot2 for visualization
+library(ggplot2)
+library(scales)
+
+
+# Create histograms for DelayMinutes and Distance
+ggplot(data, aes(x = DelayMinutes)) +
+  geom_histogram(binwidth = 2, fill = "purple", color = "black") +
+  labs(title = "Distribution of Delay Minutes", x = "Delay Minutes", y = "Frequency")
+
+ggplot(data, aes(x = Distance)) +
+  geom_histogram(binwidth = 150, fill = "cyan", color = "black") +
+  labs(title = "Distribution of Distance", x = "Flight Distance (Miles)", y = "Frequency")
+
+```
+
+# Identification of Data Quality Issues
+
+Consider the missing values, irregular cardinality problems, and outliers. Summarize the **data quality issues** using a three-column table. The first column is the feature name, the second column is the associated data quality issue, and the third column describes potential handling strategies.
+
+```{r}
+# Data Quality Summary for all features
+
+data_quality_issues <- data.frame(
+  Feature = c(
+    "ScheduledDeparture", "ActualDeparture", "ScheduledArrival", "ActualArrival", 
+    "DelayMinutes", "Distance", "Airline", "FlightNumber", "Origin", 
+    "Destination", "DelayReason", "Cancelled", "Diverted", "AircraftType", "TailNumber"
+  ),
+  DataQualityIssue = c(
+    "Missing values, Inconsistent time format", 
+    "Missing values, Inconsistent time format", 
+    "Missing values, Inconsistent time format", 
+    "Missing values, Inconsistent time format", 
+    "Outliers (negative values), Missing values", 
+    "None", 
+    "Irregular cardinality (too few airlines)", 
+    "No significant issues", 
+    "No significant issues", 
+    "No significant issues", 
+    "Missing values", 
+    "No significant issues", 
+    "No significant issues", 
+    "No significant issues", 
+    "No significant issues"
+  ),
+  HandlingStrategy = c(
+    "Convert to proper datetime format, Impute missing values with median or mode", 
+    "Convert to proper datetime format, Impute missing values with median or mode", 
+    "Convert to proper datetime format, Impute missing values with median or mode", 
+    "Convert to proper datetime format, Impute missing values with median or mode", 
+    "Remove or adjust negative values, Impute missing values with median", 
+    "No action required", 
+    "Check for any additional airlines, Ensure all valid airlines are included", 
+    "No action required", 
+    "No action required", 
+    "No action required", 
+    "Impute missing values with the most frequent delay reason (mode)", 
+    "No action required", 
+    "No action required", 
+    "No action required", 
+    "No action required"
+  )
+)
+
+# Print the summary table
+print(data_quality_issues)
+
+```
+
+
+# Scatterplot Matrix
+
+```{r}
+# Load the necessary libraries
+library(GGally)
+
+
+# Scatterplot matrix for continuous features
+ggpairs(data, columns = c("DelayMinutes", "Distance"),
+        title = "Scatterplot Matrix of Continuous Features")
+
+
+```
+
+# Visualizing Pairs of Categorical Features
+
+Use multiple **barplot visualizations**.
+
+```{r}
+# Bar plot for Airline vs DelayReason
+ggplot(data, aes(x = Airline, fill = DelayReason)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Airline vs Delay Reason", x = "Airline", y = "Count") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+```{r}
+library(tidyr)
+
+
+data_melted <- data %>%
+  pivot_longer(cols = c(Cancelled, Diverted), names_to = "FlightStatus", values_to = "Status")
+
+# Plot the data with the new structure
+ggplot(data_melted, aes(x = FlightStatus, fill = as.factor(Status))) +
+  geom_bar(position = "dodge") +
+  labs(title = "Comparison of Cancelled vs Diverted Flights", 
+       x = "Flight Status", 
+       y = "Count", 
+       fill = "Status (True/False)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+```{r}
+# Bar plot for Cancelled vs Origin
+ggplot(data, aes(x = Origin, fill = as.factor(Cancelled))) +
+  geom_bar(position = "dodge") +
+  labs(title = "Cancelled Flights by Origin Airport", 
+       x = "Origin Airport", 
+       y = "Number of Flights", 
+       fill = "Cancelled") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+```
+```{r}
+# Side-by-side bar plot with a log scale
+ggplot(data, aes(x = Airline, fill = as.factor(Cancelled))) +
+  geom_bar(position = position_dodge(width = 0.8), width = 0.6) +
+  labs(title = "Cancelled Flights by Airline (Log Scale)", 
+       x = "Airline", 
+       y = "Number of Flights (Log Scale)", 
+       fill = "Cancelled") +
+  scale_y_log10() +  # Apply log scale to the y-axis
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+```
+
+
+
+# Visualizing Relationship Between a Catergorical and Continuous Feature
+
+For a subset of the categorical and continuous features, perform **stacked barplot visualizations**. Comment on what you observed.
+
+```{r}
+# Create bins for DelayMinutes
+data$DelayCategory <- cut(data$DelayMinutes, 
+                          breaks = c(-Inf, 0, 30, 60, Inf), 
+                          labels = c("No Delay", "Short Delay", "Moderate Delay", "Long Delay"))
+# Stacked bar plot for Airline vs DelayCategory
+ggplot(data, aes(x = Airline, fill = DelayCategory)) +
+  geom_bar(position = "stack") +
+  labs(title = "Delay Category Distribution by Airline", 
+       x = "Airline", 
+       y = "Number of Flights", 
+       fill = "Delay Category") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+```
+The majority of the flights for all airlines fall into the Short Delay category, indicating that while delays occur frequently, they are typically short across all airlines.
+
+
+
+```{r}
+# Stacked bar plot for Airline vs Cancelled
+ggplot(data, aes(x = Airline, fill = as.factor(Cancelled))) +
+  geom_bar(position = "stack") +
+  labs(title = "Cancelled Flights by Airline", 
+       x = "Airline", 
+       y = "Number of Flights", 
+       fill = "Cancelled") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+```
+No airline seems to stand out as particulary better or worse when it comes to cancellations. All airlines exhibit relatively high cancellation rates. The difference between airlines are small but Southwest and United seem to have fewer cancellations than American Airlines and Delta.
+
+
+
+```{r}
+# Stacked bar plot for Origin vs Cancelled
+ggplot(data, aes(x = Origin, fill = as.factor(Cancelled))) +
+  geom_bar(position = "stack") +
+  labs(title = "Cancelled Flights by Origin Airport", 
+       x = "Origin Airport", 
+       y = "Number of Flights", 
+       fill = "Cancelled") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+
+```
+All airports show similar pattern where about half of the flights are cancelled.
+
+
+
+# Boxplot Visualizations
+
+For a subset of the categorical and continuous features, perform **boxplot visualizations**. Comment on what you observed.
+
+
+```{r}
+ggplot(data, aes(x = Airline, y = DelayMinutes)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Delay Minutes by Airline", 
+       x = "Airline", 
+       y = "Delay Minutes") +
+  ylim(0, 30) +  # Adjust the y-axis to zoom in on shorter delays
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+
+```
+The delay patterns across the airlines are very similar with no significant differences in median delay times or the range of delays. All airlines have mostly short delays with minimal outliers. 
+
+
+```{r}
+# Filter out entries with missing delay reasons
+filtered_data <- data %>% filter(DelayReason != "")
+
+# Boxplot for DelayMinutes by DelayReason
+ggplot(filtered_data, aes(x = DelayReason, y = DelayMinutes)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Delay Minutes by Delay Reason", 
+       x = "Delay Reason", 
+       y = "Delay Minutes") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+
+```
+This boxplot shows that delays for each delay reason tend to be around the same duration, with Air Traffic Control slightly edging out the other reasons. All three reason have similar variability in delay times, without many outliers.
+
+```{r}
+# Stacked bar plot for Cancelled vs Origin Airport
+ggplot(data, aes(x = Origin, fill = as.factor(Cancelled))) +
+  geom_bar(position = "stack") +
+  labs(title = "Cancelled Flights by Origin Airport", 
+       x = "Origin Airport", 
+       y = "Number of Flights", 
+       fill = "Cancelled") +
+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+
+```
+Cancellations are widespread and significant across all origina airports, with no airport having a huge red bar. 
+
+# Covariance Matrix
+
+For the continuous features, construct the **covariance matrix**. Comment on what you observed.
+
+
+```{r}
+# Select only the continuous features
+continuous_features <- data %>% select(DelayMinutes, Distance)
+
+# Compute the covariance matrix
+cov_matrix <- cov(continuous_features, use = "complete.obs")
+
+# Print the covariance matrix
+print(cov_matrix)
+
+```
+DelayMinutes has a moderate variance, indicating that delays fluctuate but are not wildly inconsistent.
+Distance has a very large variance, reflecting the wide range of flight lengths, from short to long-haul flights.
+The positive covariance between DelayMinutes and Distance suggests that longer flights might have slightly more delays, but the relationship is weak, indicating other factors may contribute more significantly to delays.
+
+# Correlation Matrix
+
+For the continuous features, construct the **correlation matrix**. Comment on what you observed.
+```{r}
+# Compute the correlation matrix for the continuous features
+cor_matrix <- cor(continuous_features, use = "complete.obs")
+
+# Print the correlation matrix
+print(cor_matrix)
+
+```
+The correlation between DelayMinutes and Distance is negligible. This suggests that regardless of whether a flight is short-haul or long-haul, the delay times are not systematically affected by the distance.
+
+
+# Range Normalization
+
+List the continuous features that require **range normalization**. What is the rationale for your selection? Perform the range normalization and show the values before and after the normalization.
+
+###DelayMinutes: 
+Flights can experience a wide variety of delays, with some having very short delays and others experiencing long delays. Normalizing this feature helps bring all the values into a similar range, especially for machine learning models that are sensitive to feature scales.
+
+###Distance: 
+Flight distances vary significantly, with some flights covering only a few hundred miles and others spanning several thousand miles. Normalizing distances will ensure this feature doesn’t dominate other features during analysis or modeling.
+
+
+# Binning
+
+Do you see the need for converting a subset of the continuous features into categorical features? Select two such continuous features and convert the first into a categorical feature using the **equal-width binning*** and the second using **equal-frequency binning**. Show the feature values after the equal-width and equal-frequency binning.
+
+```{r}
+# Create equal-width bins for DelayMinutes (for example, 4 bins)
+delay_bins_equal_width <- cut(data$DelayMinutes, breaks = 4, labels = c("Very Short Delay", "Short Delay", "Moderate Delay", "Long Delay"))
+
+# Display the binned values for DelayMinutes
+print("Equal-Width Binned DelayMinutes:")
+head(delay_bins_equal_width)
+
+```
+
+```{r}
+# Create equal-frequency bins for Distance (for example, 4 bins)
+distance_bins_equal_frequency <- ntile(data$Distance, 4)  # Using ntile() for equal frequency binning
+
+# Convert the numeric bin numbers into labels
+distance_bins_equal_frequency <- factor(distance_bins_equal_frequency, labels = c("Short Distance", "Medium Distance", "Long Distance", "Very Long Distance"))
+
+# Display the binned values for Distance
+print("Equal-Frequency Binned Distance:")
+head(distance_bins_equal_frequency)
+
+```
+
+# Undersampling
+
+Do you see a need for undersampling? **Undersampling** is used to reduce the instances from the majority class so that the final dataset is balanced. For example, a binary classification problem has a target/outcome variable that takes two values, say, *approved* and *denied*. In the dataset, if 70% of the instances have the *approved* value for the target variable, the dataset is *imbalanced*. Ideally, the dataset should have approximately equal number of instances for each the values the target variable takes. [This](https://predictivehacks.com/undersampling-by-groups-in-r/) article illustrates the undersampling.
+
+```{r}
+# Check for imbalance in Cancelled
+table(data$Cancelled)
+
+# Check for imbalance in Diverted
+table(data$Diverted)
+
+# Load necessary library
+library(dplyr)
+
+# Step 1: Check the frequency of each AircraftType
+aircraftnumber_counts <- table(data$AircraftType)
+print(aircraftnumber_counts)
+
+# Step 2: Find the minimum number of instances (for undersampling)
+min_count <- min(aircraftnumber_counts)
+print(min_count)
+
+# Step 3: Apply undersampling to each TailNumber
+set.seed(123)  # For reproducibility
+undersampled_data <- data %>%
+  group_by(AircraftType) %>%
+  sample_n(min_count, replace = FALSE) %>%
+  ungroup()
+
+# Step 4: Check the distribution after undersampling
+table(undersampled_data$AircraftType)
+
+```
+For the Cancelled and Diverted features, the difference between the TRUE and FALSE classes is minimal. Therefore, no undersampling is required for these features since the dataset is already balanced in this respect.
+However, for AircraftType, some types may have significantly more instances than others. Applying undersampling to the AircraftType feature ensures that all aircraft types are equally represented in the dataset, preventing bias towards the majority class in any subsequent analysis or modeling.
+
+
+
+# Oversampling
+
+**Oversampling** arises when we have too few instances from a class (called the minority class) relative to other classes. To boost the participation of the minority class in the (training) dataset, more observations from the minority class are generated usually by replicating the samples from the minority class.
+
+In your dataset, do you see the need for oversampling? If so, which features require oversampling?
+
+```{r}
+# Check for imbalance in DelayReason
+table(data$DelayReason)
+# Check for imbalance in AircraftType
+table(data$AircraftType)
+# Check for imbalance in Scheduled Departure Date
+table(data$ScheduledDepartureDate)
+
+```
+DelayReason and AircraftType and ScheduledDaepartureDate are balanced, so no oversampling is required for these features.
+TailNumber exhibits imbalance, I might want to oversample the less-represented tail numbers to avoid bias toward the more frequent tail numbers.
+
+
+# Summary
+
+Summarize the findings you have discovered through the exploratory data analysis. The summary should about a page and should serve as an executive report for non-technical people.
+
+### Summary of Findings from the Airline Flight Data Analysis
+
+In this analysis, we took a deep dive into a dataset full of airline flight records, focusing on delays, aircraft types, cancellations, and other factors that can affect flight operations. The goal was to uncover patterns, identify any data issues, and get a better understanding of what the data is telling us. Here’s a rundown of the key takeaways:
+
+---
+
+### 1. **Overview of the Data**
+We worked with a dataset that included features like:
+- **Continuous Features**: Flight delay times, flight distances, and scheduled vs. actual departure and arrival times.
+- **Categorical Features**: Airline, aircraft tail numbers, aircraft types, reasons for delays, cancellations, and diverted flights.
+
+These features helped us explore the relationships between different flight characteristics and the operational challenges airlines face.
+
+---
+
+### 2. **Data Quality Issues**
+During the analysis, a few data quality issues stood out:
+- **Missing Data**: Some important fields, like the scheduled and actual times of departure and arrival, had missing values. This can skew the results when analyzing delays or performance metrics, so cleaning or filling in those gaps might be needed.
+- **Inconsistent Representation**: The **TailNumber** field (which identifies specific planes) had a lot of variety, with some planes showing up in the data a lot more than others. This uneven distribution could introduce bias in certain analyses.
+- **Outliers**: There were some negative delay times (early arrivals), which makes sense but needs to be accounted for in the analysis.
+
+---
+
+### 3. **Feature Distributions and Observations**
+- **Flight Delays**: Most delays are relatively short, between 0 and 30 minutes, but there are a few cases where flights were delayed for much longer. It’s good to know that these extreme delays are rare.
+- **Aircraft Types**: The dataset is pretty balanced in terms of the types of planes (Airbus A320, Boeing 737, Boeing 777). This is great because it means our results won’t be skewed toward one type of aircraft.
+- **Reasons for Delays**: There were three main reasons for delays—**Air Traffic Control**, **Maintenance**, and **Weather**—and these were also pretty evenly spread out. This gives us a solid picture of the different factors causing delays.
+
+---
+
+### 4. **Undersampling for Tail Numbers**
+The **TailNumber** feature was quite imbalanced, with some planes showing up much more frequently than others. To fix this, we applied **undersampling**, which means we reduced the number of entries for the more common tail numbers so that all tail numbers were equally represented. This makes sure our analysis isn’t biased toward a handful of planes.
+
+---
+
+### 5. **Relationships Between Features**
+- **Delays vs. Origin**: Some airports had more frequent or severe delays than others, likely due to factors like congestion or local weather.
+- **Cancelled Flights**: Cancellations were consistent across different airlines, suggesting that cancellations are more related to industry-wide issues rather than specific airlines.
+- **Aircraft Type and Delays**: There didn’t seem to be a strong link between the type of aircraft and flight delays, so other factors are likely at play when it comes to delays.
+
+---
+
+### 6. **Covariance and Correlation**
+- **Covariance**: We didn’t see much connection between features like delay times and flight distances, meaning they’re not closely related.
+- **Correlation**: The correlation analysis backed this up, showing very weak relationships between delay times and other continuous variables like flight distance.
+
+---
+
+### 7. **Conclusion**
+Overall, the dataset gave us some useful insights, particularly about flight delays and their causes. While most features were fairly balanced, we had to address the imbalance in the **TailNumber** feature through undersampling. Flight delays tended to be on the shorter side, with a few extreme cases. Moving forward, these insights could be useful for improving operational efficiency or tackling flight delays more effectively.
+
